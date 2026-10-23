@@ -4,6 +4,12 @@ A browser-based PDF to flipbook converter by designedbyjo.
 
 Upload a PDF and read it with elastic page curls, dynamic shadows, glossy covers, light and dark themes, and immersive fullscreen. PDF processing happens on your device.
 
+## Try it online
+
+[Open the live app](https://designedbyjo.github.io/flipfolio/)
+
+No login is required. Upload a PDF or select the built-in demo.
+
 ## Run locally
 
 Serve the included `dist` folder with a static web server:
@@ -36,6 +42,16 @@ After changing the renderer, rebuild its browser bundle:
 ```sh
 npx esbuild paper-flip.js --bundle --format=iife --global-name=Paper --minify --outfile=dist/assets/paper-flip.browser.js
 ```
+
+## Publish updates to GitHub Pages
+
+The public site serves `docs/` from `main`. After changing the app or rebuilding the renderer, synchronize the deploy copy:
+
+```sh
+node scripts/sync-pages.mjs
+```
+
+Commit the updated `dist/` and `docs/` folders. GitHub Pages publishes the commit automatically.
 
 ## Limits
 
