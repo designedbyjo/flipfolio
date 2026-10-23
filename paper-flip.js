@@ -1,6 +1,12 @@
 import * as T from './vendor/three.module.js';
 // Contact darkening belongs only where paper remains near the book block.
 export function bindingContact(z){return Math.exp(-Math.max(0,z-.009)*90)}
+// A front-facing book keeps the same page scale at every fold height.
+export function createPaperCamera(width,height,pad=12,single=false){
+ const rw=width*(single?1:2)+pad*2,rh=height+pad*2,worldH=rh/width,worldW=rw/width;
+ const camera=new T.OrthographicCamera(-worldW/2,worldW/2,worldH/2,-worldH/2,.01,100);
+ camera.position.set(single?.5:0,0,10);camera.lookAt(single?.5:0,0,0);camera.updateMatrixWorld();return camera;
+}
 // CPU fallback uses the same triangular surface, including diagonal folds.
 export class CanvasPaperRenderer {
  constructor(){this.domElement=document.createElement('canvas');this.ctx=this.domElement.getContext('2d');this.ctx.imageSmoothingQuality='high';this.shadowCanvas=document.createElement('canvas');this.rasterCanvas=document.createElement('canvas');this.textureCache=new Map();this.shadowMap={};this.capabilities={getMaxAnisotropy:()=>1};this.ratio=1}
@@ -9,7 +15,7 @@ export class CanvasPaperRenderer {
  dispose(){for(const c of [this.domElement,this.shadowCanvas,this.rasterCanvas])c.width=c.height=0;this.textureCache.clear();this.rasterImage=null;this.depthBuffer=null}
  render(scene,camera){
   this.pageH=scene.userData.pageH;const ctx=this.ctx,r=this.ratio;ctx.setTransform(r,0,0,r,0,0);ctx.clearRect(0,0,this.width,this.height);scene.updateMatrixWorld();camera.updateMatrixWorld();const flat=[],faces=[],shadows=[];
-  const project=v=>{const invW=1/Math.max(.001,camera.position.z-v.z);v.project(camera);return {invW,x:(v.x*.5+.5)*this.width,y:(-.5*v.y+.5)*this.height,z:v.z}};
+  const project=v=>{const invW=camera.isOrthographicCamera?1:1/Math.max(.001,camera.position.z-v.z);v.project(camera);return {invW,x:(v.x*.5+.5)*this.width,y:(-.5*v.y+.5)*this.height,z:v.z}};
   const vertex=(m,j)=>{const v=new T.Vector3().fromBufferAttribute(m.geometry.attributes.position,j).applyMatrix4(m.matrixWorld),worldZ=v.z;const shadow=project(new T.Vector3(v.x+.28*worldZ,v.y-.44*worldZ,0));return {...project(v),worldZ,shadow}};
   scene.traverse(m=>{
    if(!m.isMesh||!m.material.map||!m.material.map.image)return;const img=m.material.map.image;if(!(img.naturalWidth||img.width))return;
@@ -26,7 +32,7 @@ export class CanvasPaperRenderer {
     const t=polygon.map(v=>({x:(v.x*m.material.map.repeat.x+m.material.map.offset.x)*(img.naturalWidth||img.width),y:(.5-v.y/this.pageH)*(img.naturalHeight||img.height)}));
     const angle=k===0?0:k===cuts.length-2?Math.PI:Math.max(0,Math.min(Math.PI,(cuts[k]+cuts[k+1])/(2*r0)));
     const normal=new T.Vector3(-spec.nx*Math.sin(angle)*mirror,-spec.ny*Math.sin(angle),Math.cos(angle)).multiplyScalar(mirror);if(!front)normal.negate();
-    const bending=Math.sin(angle),nz=Math.max(0,normal.z);const gloss=Math.pow(Math.max(0,Math.abs(normal.x)*.45+normal.z*.893),28)*bending*.8;const shade=bending*(.035+.30*(1-nz));const raised=p.reduce((a,v)=>a+v.worldZ,0)/p.length;
+    const bending=Math.sin(angle),nz=Math.max(0,normal.z);const gloss=Math.pow(Math.max(0,Math.abs(normal.x)*.45+normal.z*.893),28)*bending*.12;const shade=bending*(.035+.30*(1-nz));const raised=p.reduce((a,v)=>a+v.worldZ,0)/p.length;
     faces.push({p,t,img,gloss,shade,raised,binding:m.material.userData.binding*bindingContact(raised),spine:project(new T.Vector3(0,0,.009)).x,pageWidth:Math.abs(project(new T.Vector3(mirror,0,.009)).x-project(new T.Vector3(0,0,.009)).x),direction:mirror,planar:k===0||k===cuts.length-2,z:p.reduce((a,v)=>a+v.z,0)/p.length});if(raised>.018)shadows.push((front?p:[...p].reverse()).map(v=>v.shadow));
    }
 
@@ -86,10 +92,10 @@ export class PageFlip {
  constructor(el,options){
   this.el=el;this.o=options;this.width=options.width;this.height=options.height;this.w=1;this.h=options.height/options.width;this.index=0;this.events={};this.pages=[];this.textures=[];this.drag=null;this.motion=null;this.dead=false;this.disposables=[];this.single=options.singlePage===true;this.cover=options.showCover!==false;this.sheet=null;
   try{if(options.renderer==='canvas')throw Error('Canvas requested');this.renderer=new T.WebGLRenderer({alpha:true,antialias:true,powerPreference:'low-power'});}catch(e){this.renderer=new CanvasPaperRenderer()}
-  this.renderer.setPixelRatio(Math.min(devicePixelRatio||1,2));this.renderer.outputColorSpace=T.SRGBColorSpace;this.renderer.shadowMap.enabled=true;this.renderer.shadowMap.type=T.PCFSoftShadowMap;
+  this.renderer.setPixelRatio(Math.min(devicePixelRatio||1,2));this.renderer.outputColorSpace=T.SRGBColorSpace;this.renderer.toneMapping=T.NoToneMapping;this.renderer.shadowMap.enabled=true;this.renderer.shadowMap.type=T.PCFSoftShadowMap;
   const pad=12;this.pad=pad;this.el.style.cssText=`position:relative;width:${this.width*(this.single?1:2)}px;height:${this.height}px;flex-shrink:0;touch-action:none;cursor:grab;`;
   const cv=this.renderer.domElement;cv.style.cssText=`position:absolute;left:-${pad}px;top:-${pad}px;width:calc(100% + ${pad*2}px);height:calc(100% + ${pad*2}px);touch-action:none;filter:drop-shadow(0 8px 9px #233d3020);`;cv.setAttribute('aria-label','Flipbook dengan halaman lentur. Geser ke kiri atau kanan untuk membalik.');cv.setAttribute('role','img');this.el.append(cv);
-  const rw=this.width*(this.single?1:2)+pad*2,rh=this.height+pad*2;this.renderer.setSize(rw,rh,false);this.scene=new T.Scene();this.scene.userData.pageH=this.h;const worldH=this.h*(rh/this.height),distance=worldH/(2*Math.tan(T.MathUtils.degToRad(30)/2));this.camera=new T.PerspectiveCamera(30,rw/rh,.01,100);this.camera.position.set(this.single?.5:0,0,distance);this.camera.lookAt(this.single?.5:0,0,0);
+  const rw=this.width*(this.single?1:2)+pad*2,rh=this.height+pad*2;this.renderer.setSize(rw,rh,false);this.scene=new T.Scene();this.scene.userData.pageH=this.h;this.camera=createPaperCamera(this.width,this.height,pad,this.single);
   this.scene.add(new T.AmbientLight(0xffffff,2.1));const light=new T.DirectionalLight(0xfff7e9,2.7);light.position.set(-2,4,7);light.castShadow=true;light.shadow.mapSize.set(1024,1024);Object.assign(light.shadow.camera,{left:-3,right:3,top:3,bottom:-3,near:.1,far:15});light.shadow.bias=-.0005;light.shadow.normalBias=.015;light.shadow.radius=4;this.scene.add(light);
   this.ground=new T.Mesh(new T.PlaneGeometry(7,6),new T.ShadowMaterial({opacity:.18}));this.ground.position.z=-.035;this.ground.receiveShadow=true;this.scene.add(this.ground);
   this.group=new T.Group();this.scene.add(this.group);
@@ -128,8 +134,22 @@ export class PageFlip {
   if(!this.blockTexture){const c=document.createElement('canvas');c.width=400;c.height=Math.round(400*this.h);const ctx=c.getContext('2d');ctx.fillStyle='#65615a';ctx.fillRect(0,0,c.width,c.height);ctx.fillStyle='#f5f2eb';ctx.fillRect(3,0,c.width-7,c.height-5);for(let y=0;y<c.height;y+=3){ctx.fillStyle=y%2?'#cec9bf':'#e4dfd5';ctx.fillRect(c.width-6,y,4,1)}for(let y=c.height-11;y<c.height-3;y+=2){ctx.fillStyle='#b1aba0';ctx.fillRect(4,y,c.width-10,1)}ctx.fillStyle='#39393c';ctx.fillRect(0,c.height-3,c.width,3);this.blockTexture=new T.CanvasTexture(c);this.blockTexture.colorSpace=T.SRGBColorSpace;this.disposables.push(this.blockTexture)}
   const block=new T.Mesh(new T.PlaneGeometry(.982,this.h-.012),this.material(this.blockTexture,T.FrontSide,false,false,false));block.position.set(.5,-.016,-.028);block.castShadow=true;this.group.add(block);
  }
- material(tex,side=T.FrontSide,mirror=false,bindingRight=false,binding=true){let map=tex;if(mirror&&tex){map=tex.clone();map.repeat.x=-1;map.offset.x=1;map.needsUpdate=true;(this.frameTextures??=[]).push(map)}const m=new T.MeshPhysicalMaterial({map,color:map?0xffffff:0xfbf9f2,roughness:.38,metalness:0,clearcoat:.82,clearcoatRoughness:.15,specularIntensity:.65,ior:1.46,side});if(tex?.userData.embossedCover){m.bumpMap=this.coverBump;m.bumpScale=.012;m.roughness=.5;m.clearcoat=.48;m.clearcoatRoughness=.28}m.userData.binding=binding?(tex?.userData?.embossedCover ? .10 : .18):0;m.userData.bindingRight=bindingRight;
-  if(binding){m.onBeforeCompile=shader=>{shader.vertexShader=shader.vertexShader.replace('#include <common>','#include <common>\nvarying float vBindingDistance;\nvarying float vPageLift;').replace('#include <uv_vertex>','#include <uv_vertex>\nvBindingDistance = '+(bindingRight?'1.0 - uv.x':'uv.x')+';\nvPageLift = max(0.0, position.z - 0.009);');shader.fragmentShader=shader.fragmentShader.replace('#include <common>','#include <common>\nvarying float vBindingDistance;\nvarying float vPageLift;').replace('#include <map_fragment>','#include <map_fragment>\nfloat bindingShade = exp(-vBindingDistance * 48.0) * '+m.userData.binding.toFixed(3)+' * exp(-vPageLift * 90.0);\ndiffuseColor.rgb *= 1.0 - bindingShade;')};m.customProgramCacheKey=()=>`paper-contact-binding-${bindingRight}-${m.userData.binding}`}
+ material(tex,side=T.FrontSide,mirror=false,bindingRight=false,binding=true){let map=tex;if(mirror&&tex){map=tex.clone();map.repeat.x=-1;map.offset.x=1;map.needsUpdate=true;(this.frameTextures??=[]).push(map)}const m=new T.MeshPhysicalMaterial({map,color:map?0xffffff:0xfbf9f2,roughness:.38,metalness:0,clearcoat:.82,clearcoatRoughness:.15,specularIntensity:.65,ior:1.46,side,toneMapped:false});if(tex?.userData.embossedCover){m.bumpMap=this.coverBump;m.bumpScale=.012;m.roughness=.5;m.clearcoat=.48;m.clearcoatRoughness=.28}m.userData.binding=binding?(tex?.userData?.embossedCover ? .10 : .18):0;m.userData.bindingRight=bindingRight;
+  // Printed artwork is display-referred sRGB, not a lit paint/albedo sample.
+  // Keep the texture neutral; apply only contact/cast shadows and local fold finish.
+  m.onBeforeCompile=shader=>{
+   const varyings='\nvarying float vBindingDistance;\nvarying float vPageLift;\nvarying vec3 vPaperNormal;';
+   shader.vertexShader=shader.vertexShader.replace('#include <common>','#include <common>'+varyings).replace('#include <uv_vertex>','#include <uv_vertex>\nvBindingDistance = '+(bindingRight?'1.0 - uv.x':'uv.x')+';\nvPageLift = max(0.0, position.z - 0.009);\nvPaperNormal = normal;');
+   shader.fragmentShader=shader.fragmentShader.replace('#include <common>','#include <common>'+varyings).replace('#include <shadowmap_pars_fragment>','#include <shadowmap_pars_fragment>\n#include <shadowmask_pars_fragment>').replace('#include <map_fragment>','#include <map_fragment>\nfloat bindingShade = exp(-vBindingDistance * 48.0) * '+m.userData.binding.toFixed(3)+' * exp(-vPageLift * 90.0);\ndiffuseColor.rgb *= 1.0 - bindingShade;').replace('#include <opaque_fragment>',`
+vec3 paperNormal = normalize(vPaperNormal);
+float paperBend = sqrt(max(0.0, 1.0 - paperNormal.z * paperNormal.z));
+float paperShade = paperBend * (0.035 + 0.30 * (1.0 - abs(paperNormal.z)));
+float paperGloss = pow(max(0.0, abs(paperNormal.x) * 0.45 + abs(paperNormal.z) * 0.893), 28.0) * paperBend * 0.12;
+outgoingLight = diffuseColor.rgb * mix(1.0, getShadowMask(), 0.24);
+outgoingLight = mix(outgoingLight, vec3(0.0052, 0.0080, 0.0065), paperShade);
+outgoingLight = mix(outgoingLight, vec3(1.0), paperGloss);
+#include <opaque_fragment>`);
+  };m.customProgramCacheKey=()=>`paper-print-color-v1-${bindingRight}-${m.userData.binding}`;
   this.frameMaterials??=[];this.frameMaterials.push(m);return m}
  clear(){while(this.group.children.length){const m=this.group.children[0];this.group.remove(m);if(m.geometry)m.geometry.dispose()}for(const m of this.frameMaterials||[])m.dispose();this.frameMaterials=[];for(const t of this.frameTextures||[])t.dispose();this.frameTextures=[];this.sheet=null}
  blankPaper(){if(!this.blankTexture){const c=document.createElement('canvas');c.width=c.height=8;const ctx=c.getContext('2d');ctx.fillStyle='#fff';ctx.fillRect(0,0,8,8);this.blankTexture=new T.CanvasTexture(c);this.blankTexture.colorSpace=T.SRGBColorSpace;this.disposables.push(this.blankTexture)}return this.blankTexture}
