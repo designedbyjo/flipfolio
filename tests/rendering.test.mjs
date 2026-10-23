@@ -1,0 +1,9 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {CanvasPaperRenderer} from '../paper-flip.js';
+function renderer(width=16,height=16){const r=Object.create(CanvasPaperRenderer.prototype),ctx={createImageData:(w,h)=>({width:w,height:h,data:new Uint8ClampedArray(w*h*4)}),putImageData(){}};Object.assign(r,{ratio:1,rasterCanvas:{width,height,getContext:()=>ctx},ctx:{drawImage(){}},pixelsFor:img=>img});return r}
+const texture=(a,b=a)=>({width:2,height:2,data:new Uint8ClampedArray([...a,255,...b,255,...a,255,...b,255])});
+function quad(img,x0=0,x1=16,z=.2,u0=0,u1=1){return {img,p:[{x:x0,y:0,z,invW:1},{x:x1,y:0,z,invW:1},{x:x1,y:16,z,invW:1},{x:x0,y:16,z,invW:1}],t:[{x:u0,y:0},{x:u1,y:0},{x:u1,y:1},{x:u0,y:1}],spine:0,direction:1,pageWidth:16,binding:0,shade:0,gloss:0}}
+test('lifted surface has no coverage gaps or texture seams between adjacent patches',()=>{const img=texture([255,40,20],[10,100,240]),whole=renderer(),split=renderer();whole.rasterFaces([quad(img)]);split.rasterFaces([quad(img,0,8,.2,0,.5),quad(img,8,16,.2,.5,1)]);assert.deepEqual(split.rasterImage.data,whole.rasterImage.data);for(let i=3;i<split.rasterImage.data.length;i+=4)assert.equal(split.rasterImage.data[i],255)});
+test('near paper occludes the far surface regardless of patch ordering',()=>{const near=quad(texture([240,10,20]),0,16,.1),far=quad(texture([5,20,240]),0,16,.4);for(const order of [[near,far],[far,near]]){const r=renderer();r.rasterFaces(order);for(let i=0;i<r.rasterImage.data.length;i+=4)assert.deepEqual([...r.rasterImage.data.slice(i,i+4)],[240,10,20,255])}});
+test('flat paper occludes curled patches without being repainted in the pixel layer',()=>{const r=renderer(),near=quad(texture([200,20,20]),0,8,.1,0,.5),far=quad(texture([10,20,240]),0,16,.4);r.rasterFaces([far],[near]);for(let y=0;y<16;y++)for(let x=0;x<16;x++){const i=(y*16+x)*4;assert.equal(r.rasterImage.data[i+3],x<8?0:255)}});
